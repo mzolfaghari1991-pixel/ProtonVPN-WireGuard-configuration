@@ -1,5 +1,6 @@
 import os
 import time
+import random # <--- NEW: Import random library
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -116,7 +117,6 @@ class ProtonVPN:
                     country_name_element = country.find_element(By.CSS_SELECTOR, "summary")
                     country_name = country_name_element.text.split('\n')[0].strip()
                     
-                    # Skip all countries that are not the target
                     if TARGET_COUNTRY_NAME not in country_name:
                         print(f"Skipping country: {country_name}")
                         continue
@@ -131,6 +131,10 @@ class ProtonVPN:
                     buttons = country.find_elements(By.CSS_SELECTOR, "tr .button")
 
                     for index, btn in enumerate(buttons):
+                        
+                        # Generate random delay between 60 and 90 seconds
+                        random_delay = random.randint(60, 90) # <--- NEW: Random delay 60-90s
+                        
                         try:
                             self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
                             time.sleep(0.5)
@@ -139,20 +143,21 @@ class ProtonVPN:
                             ActionChains(self.driver).move_to_element(btn).click().perform()
 
                             # 2. Wait explicitly for the confirm button to be clickable (Modal appeared)
-                            confirm_btn = WebDriverWait(self.driver, 15).until(
+                            confirm_btn = WebDriverWait(self.driver, 30).until( # Increased wait to 30s
                                 EC.element_to_be_clickable(CONFIRM_BUTTON_SELECTOR)
                             )
                             confirm_btn.click()
 
                             # 3. CRITICAL: Wait for the modal backdrop to disappear 
-                            WebDriverWait(self.driver, 15).until(
+                            WebDriverWait(self.driver, 30).until( # Increased wait to 30s
                                 EC.invisibility_of_element_located(MODAL_BACKDROP_SELECTOR)
                             )
                             
                             print(f"Successfully downloaded config {index + 1} for {country_name}.")
+                            print(f"Waiting for {random_delay} seconds before next download to avoid rate limit...")
 
-                            # 4. Increased delay to prevent rate limiting/race conditions
-                            time.sleep(15) 
+                            # 4. Apply the random, long delay
+                            time.sleep(random_delay) 
 
                         except (TimeoutException, ElementClickInterceptedException) as e:
                             print(f"Error downloading file {index + 1} for {country_name}. Timeout or Interception. Retrying cleanup... Error: {e}")
@@ -163,12 +168,13 @@ class ProtonVPN:
                             except:
                                 print("Warning: Backdrop cleanup failed, continuing anyway.")
                             
-                            time.sleep(30)
+                            # Apply a longer fixed delay if an error occurs
+                            time.sleep(90)
                             continue
                         
                         except Exception as e:
                             print(f"General error during download {index + 1} for {country_name}: {e}")
-                            time.sleep(30)
+                            time.sleep(90)
                             continue
 
                 except Exception as e:
