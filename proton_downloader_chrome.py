@@ -1,6 +1,6 @@
 import os
 import time
-import random
+import random 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -15,7 +15,7 @@ CONFIRM_BUTTON_SELECTOR = (By.CSS_SELECTOR, ".button-solid-norm:nth-child(2)")
 # Constants
 DOWNLOAD_DIR = os.path.join(os.getcwd(), "downloaded_configs")
 TARGET_COUNTRY_NAME = "United States"
-MAX_DOWNLOADS_PER_SESSION = 20 # <--- NEW: Maximum downloads before relogin
+MAX_DOWNLOADS_PER_SESSION = 20 # Maximum downloads before relogin
 RELOGIN_DELAY = 120 # Delay in seconds between sessions to cool down the IP
 
 # Create the download directory if it doesn't exist
@@ -116,7 +116,10 @@ class ProtonVPN:
                 return False
 
     def process_downloads(self):
-        """Processes downloads for the target country with a limit per call."""
+        """
+        Processes downloads for the target country with a limit per call (MAX_DOWNLOADS_PER_SESSION).
+        Returns True if all downloads for the country are finished, False otherwise.
+        """
         try:
             self.driver.execute_script("window.scrollTo(0,0)")
             time.sleep(2)
@@ -132,7 +135,7 @@ class ProtonVPN:
             print(f"Found {len(countries)} total countries to check.")
             
             download_counter = 0
-            all_downloads_finished = True # Assume true until we start downloading
+            all_downloads_finished = True 
 
             for country in countries:
                 try:
@@ -151,10 +154,10 @@ class ProtonVPN:
 
                     for index, btn in enumerate(buttons):
                         
-                        # --- NEW: Check session limit ---
+                        # --- Check session limit (moved inside the country loop) ---
                         if download_counter >= MAX_DOWNLOADS_PER_SESSION:
                             print(f"Session limit reached ({MAX_DOWNLOADS_PER_SESSION}). Stopping for relogin...")
-                            all_downloads_finished = False # We still have more to download
+                            all_downloads_finished = False 
                             return all_downloads_finished
                         
                         random_delay = random.randint(60, 90)
@@ -187,12 +190,27 @@ class ProtonVPN:
                             print(f"General error during download {index + 1}: {e}. Shutting down session.")
                             all_downloads_finished = False
                             return all_downloads_finished
+                            
+                    # If we finish the buttons loop without hitting the session limit, 
+                    # it means we downloaded all available configs for this country.
+                    print(f"All available configs for {country_name} processed in this run.")
+                    # Since we only target one country, we can break the countries loop here
+                    break 
 
-            return all_downloads_finished # Returns True if it finished all loops
+                except Exception as e:
+                    print(f"Error processing country block: {e}")
+                    # If there's an error in the country block, assume we should try again later
+                    all_downloads_finished = False 
+                    return all_downloads_finished
+
 
         except Exception as e:
             print(f"Error in main download loop: {e}")
-            return False
+            all_downloads_finished = False
+            
+        # The return is outside the main try block, catching all exceptions above
+        return all_downloads_finished 
+
 
     def run(self, username, password):
         """Executes the full automation workflow with relogin cycle."""
@@ -201,6 +219,7 @@ class ProtonVPN:
         session_count = 0
         
         try:
+            # We assume the site will always show the same number of configs, so we stop the loop when all are processed.
             while not all_downloads_finished and session_count < 10: # Limit to 10 sessions (200 downloads) for safety
                 
                 session_count += 1
@@ -223,8 +242,9 @@ class ProtonVPN:
                 if all_downloads_finished:
                     print("\n###################### All configurations downloaded successfully! ######################")
                 else:
+                    # Only wait if we reached the session limit or encountered a recoverable error
                     print(f"Session {session_count} completed. Waiting {RELOGIN_DELAY} seconds before relogging in...")
-                    time.sleep(RELOGIN_DELAY) # Wait 2 minutes before trying again
+                    time.sleep(RELOGIN_DELAY) 
 
         except Exception as e:
             print(f"Runtime Error in main loop: {e}")
