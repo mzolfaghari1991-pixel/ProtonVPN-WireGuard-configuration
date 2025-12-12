@@ -21,7 +21,8 @@ DOWNLOAD_DIR = os.path.join(os.getcwd(), "downloaded_configs")
 SERVER_ID_LOG_FILE = os.path.join(os.getcwd(), "downloaded_server_ids.json") 
 TARGET_COUNTRY_NAME = None # Process all countries
 MAX_DOWNLOADS_PER_SESSION = 20 
-RELOGIN_DELAY = 120 
+MAX_OPENVPN_DOWNLOADS_PER_SESSION = 20
+RELOGIN_DELAY = 60
 
 # Environment variables will be read once at runtime
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -35,16 +36,15 @@ if not os.path.exists(DOWNLOAD_DIR):
 
 class ProtonVPN:
     def __init__(self):
+        # ... (Initialization code remains the same)
         self.options = webdriver.ChromeOptions()
         
-        # --- Optimization for GitHub Actions/Server Environments ---
         self.options.add_argument('--headless')
         self.options.add_argument('--no-sandbox')
         self.options.add_argument('--disable-dev-shm-usage')
         self.options.add_argument('--disable-gpu')
         self.options.add_argument('--window-size=1920,1080')
         
-        # *** Key Configuration: Setting the Download Path in Chrome ***
         prefs = {
             "download.default_directory": DOWNLOAD_DIR,
             "download.prompt_for_download": False,
@@ -55,8 +55,9 @@ class ProtonVPN:
 
         self.driver = None
 
+    # --- Setup/Teardown/Log Management (Unchanged) ---
     def setup(self):
-        """Initializes the WebDriver (Chrome) with Headless options."""
+        """Initializes the WebDriver (Chrome) with Headless options.)"""
         self.driver = webdriver.Chrome(options=self.options)
         self.driver.set_window_size(1936, 1048)
         self.driver.implicitly_wait(10)
@@ -69,21 +70,27 @@ class ProtonVPN:
             print("WebDriver closed.")
 
     def load_downloaded_ids(self):
-        """Loads the set of previously downloaded server IDs."""
+        """Loads the set of previously downloaded server IDs for both types."""
         if os.path.exists(SERVER_ID_LOG_FILE):
             try:
                 with open(SERVER_ID_LOG_FILE, 'r') as f:
-                    return set(json.load(f))
+                    data = json.load(f)
+                    return set(data.get('wireguard', [])), set(data.get('openvpn', []))
             except json.JSONDecodeError:
-                print("Warning: Log file corrupted. Starting with an empty list.")
-                return set()
-        return set()
+                print("Warning: Log file corrupted. Starting with empty lists.")
+                return set(), set()
+        return set(), set()
 
-    def save_downloaded_ids(self, ids):
-        """Saves the set of downloaded server IDs."""
+    def save_downloaded_ids(self, wireguard_ids, openvpn_ids):
+        """Saves the set of downloaded server IDs for both types."""
+        data = {
+            'wireguard': list(wireguard_ids),
+            'openvpn': list(openvpn_ids)
+        }
         with open(SERVER_ID_LOG_FILE, 'w') as f:
-            json.dump(list(ids), f)
+            json.dump(data, f)
             
+    # --- Login/Navigation/Logout (Unchanged) ---
     def login(self, username, password):
         try:
             self.driver.get("https://protonvpn.com/")
@@ -139,24 +146,34 @@ class ProtonVPN:
                 print(f"Error Logout: {e}")
                 return False
 
-    def process_downloads(self, downloaded_ids):
+    # --- WireGuard/IKEv2 Download (CRITICALLY MODIFIED) ---
+    def process_wireguard_downloads(self, downloaded_ids):
         """
-        Processes downloads for ALL countries, limited by MAX_DOWNLOADS_PER_SESSION.
-        Returns (all_downloads_finished, downloaded_ids).
+        Processes WireGuard/IKEv2 downloads for ALL countries, limited by MAX_DOWNLOADS_PER_SESSION.
         """
-        # ... (Unchanged logic for login, navigation, and core downloading)
+        print("\n--- Starting WireGuard/IKEv2 Download Session ---")
         try:
             self.driver.execute_script("window.scrollTo(0,0)")
             time.sleep(1) 
 
-            try:
-                # Click OpenVPN/WireGuard tab
-                self.driver.find_element(By.CSS_SELECTOR, ".flex:nth-child(4) > .mr-8:nth-child(3) > .relative").click()
-                time.sleep(1) 
-            except:
-                pass
+            # CRITICAL: Click WireGuard/IKEv2 tab (first tab)
+            wireguard_tab_selector = (By.CSS_SELECTOR, ".flex:nth-child(4) > .mr-8:nth-child(1) > .relative")
+            WebDriverWait(self.driver, 10).until(
+                EC.element_to_be_clickable(wireguard_tab_selector)
+            ).click()
+            time.sleep(2) 
+
+            # CRITICAL: Select Platform (based on user's successful finding)
+            platform_select_selector = (By.CSS_SELECTOR, ".flex:nth-child(4) > .mr-8:nth-child(3) .radio-fakeradio")
+            WebDriverWait(self.driver, 10).until(
+                EC.element_to_be_clickable(platform_select_selector)
+            ).click()
+            time.sleep(2)
+            print("Platform set for WireGuard/IKEv2.")
             
-            print(f"Found {len(downloaded_ids)} server IDs already logged as downloaded.")
+            # ... (Rest of the WireGuard download logic remains the same)
+            
+            print(f"Found {len(downloaded_ids)} WireGuard server IDs already logged as downloaded.")
 
             countries = self.driver.find_elements(By.CSS_SELECTOR, ".mb-6 details")
             print(f"Found {len(countries)} total countries to check.")
@@ -174,7 +191,7 @@ class ProtonVPN:
                         all_downloads_finished = False 
                         return all_downloads_finished, downloaded_ids
                     
-                    print(f"--- Processing country: {country_name} ---")
+                    print(f"--- Processing country (WireGuard): {country_name} ---")
 
                     self.driver.execute_script("arguments[0].open = true;", country)
                     time.sleep(0.5)
@@ -202,10 +219,10 @@ class ProtonVPN:
                             btn = row.find_element(By.CSS_SELECTOR, ".button")
 
                         except Exception as e:
-                            print(f"Could not determine Server ID/Button for row {index} in {country_name}. Error: {e}")
+                            # print(f"Could not determine Server ID/Button for row {index} in {country_name}. Error: {e}")
                             continue 
 
-                        random_delay = random.randint(60, 90) 
+                        random_delay = random.randint(10, 20) 
                         
                         # --- Execute Download ---
                         try:
@@ -214,6 +231,7 @@ class ProtonVPN:
 
                             ActionChains(self.driver).move_to_element(btn).click().perform()
 
+                            # Confirmation modal click
                             confirm_btn = WebDriverWait(self.driver, 30).until(
                                 EC.element_to_be_clickable(CONFIRM_BUTTON_SELECTOR)
                             )
@@ -224,25 +242,23 @@ class ProtonVPN:
                             )
                             
                             download_counter += 1
-                            print(f"Successfully downloaded config (Server ID: {server_id}). Total in session: {download_counter}. Waiting {random_delay}s...")
+                            print(f"Successfully downloaded WG/IKEv2 config (Server ID: {server_id}). Total in session: {download_counter}. Waiting {random_delay}s...")
                             time.sleep(random_delay) 
 
                             downloaded_ids.add(server_id)
                             
                         except (TimeoutException, ElementClickInterceptedException) as e:
-                            print(f"CRITICAL ERROR: Failed to download config {server_id} in {country_name}. Rate limit or session issue detected. Shutting down session.")
+                            print(f"CRITICAL ERROR: Failed to download WG/IKEv2 config {server_id} in {country_name}. Rate limit or session issue detected. Shutting down session.")
                             all_downloads_finished = False
                             return all_downloads_finished, downloaded_ids
                         
                         except Exception as e:
-                            print(f"General error during download {server_id} in {country_name}: {e}. Shutting down session.")
+                            print(f"General error during WG/IKEv2 download {server_id} in {country_name}: {e}. Shutting down session.")
                             all_downloads_finished = False
                             return all_downloads_finished, downloaded_ids
                             
                     if all_configs_in_country_downloaded:
-                        print(f"All configs for {country_name} were already downloaded. Moving to next country.")
-                    else:
-                        print(f"Completed download attempts for {country_name} in this session.")
+                        print(f"All WG/IKEv2 configs for {country_name} were already downloaded. Moving to next country.")
                         
                 except Exception as e:
                     print(f"Error processing country block for {country_name}: {e}. Continuing to next country.")
@@ -250,12 +266,127 @@ class ProtonVPN:
             all_downloads_finished = True 
 
         except Exception as e:
-            print(f"Error in main download loop: {e}")
+            print(f"Error in main WireGuard download loop: {e}")
             all_downloads_finished = False
             
         return all_downloads_finished, downloaded_ids
-    
-    
+
+
+    # --- OpenVPN Download Function (MODIFIED: Removed platform selection) ---
+    def process_openvpn_downloads(self, downloaded_ids):
+        """
+        Processes OpenVPN downloads for ALL countries (relying on default/auto-selected platform).
+        """
+        print("\n--- Starting OpenVPN Download Session (Platform assumed to be set) ---")
+        try:
+            self.driver.execute_script("window.scrollTo(0,0)")
+            time.sleep(1) 
+
+            # CRITICAL: Click OpenVPN tab (second tab)
+            openvpn_tab_selector = (By.CSS_SELECTOR, ".flex:nth-child(4) > .mr-8:nth-child(2) > .relative")
+            WebDriverWait(self.driver, 10).until(
+                EC.element_to_be_clickable(openvpn_tab_selector)
+            ).click()
+            time.sleep(2) 
+            
+            # --- REMOVED: Platform selection logic (as per user request, relying on auto-set) ---
+            print("Relying on auto-set Platform (Android/Linux) for OpenVPN.")
+
+            # 2. Iterate through countries and click 'Create'
+            
+            countries = self.driver.find_elements(By.CSS_SELECTOR, ".mb-6 details")
+            download_counter = 0
+            all_downloads_finished = True 
+
+            for country in countries:
+                try:
+                    country_name_element = country.find_element(By.CSS_SELECTOR, "summary")
+                    country_name = country_name_element.text.split('\n')[0].strip()
+                    
+                    if download_counter >= MAX_OPENVPN_DOWNLOADS_PER_SESSION:
+                        print(f"Session limit reached ({MAX_OPENVPN_DOWNLOADS_PER_SESSION}). Stopping for relogin...")
+                        all_downloads_finished = False 
+                        return all_downloads_finished, downloaded_ids
+                    
+                    self.driver.execute_script("arguments[0].open = true;", country)
+                    time.sleep(0.5)
+
+                    rows = country.find_elements(By.CSS_SELECTOR, "tr")
+                    
+                    try:
+                        udp_row = rows[-2] # UDP is typically the second to last row
+                        tcp_row = rows[-1] # TCP is typically the last row
+                    except IndexError:
+                        print(f"Could not find UDP/TCP rows for {country_name}. Skipping.")
+                        continue
+                        
+                    protocols = [
+                        {'row': udp_row, 'protocol': 'UDP'},
+                        {'row': tcp_row, 'protocol': 'TCP'}
+                    ]
+                    
+                    country_finished = True
+
+                    for item in protocols:
+                        proto_row = item['row']
+                        protocol = item['protocol']
+                        
+                        openvpn_server_id = f"{country_name.split()[0].upper()}-OpenVPN-{protocol}"
+                        
+                        if openvpn_server_id in downloaded_ids:
+                            continue
+                        
+                        country_finished = False
+
+                        if download_counter >= MAX_OPENVPN_DOWNLOADS_PER_SESSION:
+                            print(f"Session limit reached ({MAX_OPENVPN_DOWNLOADS_PER_SESSION}). Stopping for relogin...")
+                            all_downloads_finished = False 
+                            return all_downloads_finished, downloaded_ids
+                        
+                        # Select the 'Create' button within the row
+                        create_btn_selector = (By.CSS_SELECTOR, ".button")
+                        create_btn = proto_row.find_element(*create_btn_selector)
+
+                        random_delay = random.randint(60, 90) 
+                        
+                        print(f"--- Processing country (OpenVPN {protocol}): {country_name} ---")
+
+                        # --- Execute Download ---
+                        try:
+                            self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", create_btn)
+                            time.sleep(0.5)
+
+                            ActionChains(self.driver).move_to_element(create_btn).click().perform()
+
+                            # OpenVPN downloads immediately after clicking Create
+                            
+                            download_counter += 1
+                            print(f"Successfully downloaded OpenVPN config (ID: {openvpn_server_id}). Total in session: {download_counter}. Waiting {random_delay}s...")
+                            time.sleep(random_delay) 
+
+                            downloaded_ids.add(openvpn_server_id)
+                            
+                        except Exception as e:
+                            print(f"General error during OpenVPN download {openvpn_server_id} in {country_name}: {e}. Shutting down session.")
+                            all_downloads_finished = False
+                            return all_downloads_finished, downloaded_ids
+
+                    if country_finished:
+                        print(f"All OpenVPN configs for {country_name} were already downloaded. Moving to next country.")
+                        
+                except Exception as e:
+                    print(f"Error processing country block for {country_name} (OpenVPN): {e}. Continuing to next country.")
+                    
+            all_downloads_finished = True 
+
+        except Exception as e:
+            print(f"Error in main OpenVPN download loop: {e}")
+            all_downloads_finished = False
+            
+        return all_downloads_finished, downloaded_ids
+
+    # --- File Organization and Run Loop (Unchanged) ---
+
     def organize_and_send_files(self):
         """
         Organizes downloaded files by country and sends a zip file for each country via Telegram.
@@ -263,42 +394,36 @@ class ProtonVPN:
         print("\n###################### Organizing and Sending Files ######################")
         
         country_files = {}
+        
         for filename in os.listdir(DOWNLOAD_DIR):
             if filename.endswith(".ovpn") or filename.endswith(".conf"):
                 try:
-                    # --- NEW LOGIC FOR COUNTRY CODE EXTRACTION ---
-                    # 1. Clean filename from browser additions (e.g., ' (1)')
-                    name_parts = filename.split('.')
-                    base_name = name_parts[0]
                     
-                    # 2. Find the country code (e.g., 'US', 'JP', 'CH')
-                    # File names look like: wg-US-FREE-11.conf OR wg-US-FREE-11 (1).conf
-                    
-                    # Remove 'wg-' prefix if present
-                    if base_name.startswith("wg-"):
-                        name_without_prefix = base_name[3:]
-                    else:
-                        name_without_prefix = base_name
+                    if "udp.ovpn" in filename or "tcp.ovpn" in filename:
+                        # --- OpenVPN files ---
+                        name_without_ext = filename.split('.')[0]
+                        country_code = name_without_ext.split('_')[0].upper()
                         
-                    # Extract the first two letters before the next '-' or '#', assuming 2-letter ISO code
-                    # Handles: US-FREE-11, JP-12, CH-FREE-1
-                    country_code = name_without_prefix.split('-')[0].split('#')[0].upper()
-                    
-                    # Ensure the result is a 2-letter code or a known country abbreviation like US, JP
-                    if len(country_code) > 3 or not country_code.isalpha():
-                        # Fallback for complex naming
-                        country_code = 'OTHERS' 
-                    
-                    # If it starts with a country code (e.g., US) but has other chars, keep only the code
-                    if len(country_code) > 2:
-                        country_code = country_code[:2]
-                    
-                    # -----------------------------------------------
+                    else:
+                        # --- WireGuard/IKEv2 files (using previous successful logic) ---
+                        name_without_ext = filename.split('.')[0]
+                        base_name = name_without_ext.split('(')[0].strip() 
+                        
+                        if base_name.startswith("wg-"):
+                            name_without_prefix = base_name[3:]
+                        else:
+                            name_without_prefix = base_name
+                            
+                        country_code = name_without_prefix.split('-')[0].split('#')[0].upper()
 
+                    if len(country_code) > 3 or not country_code.isalpha():
+                        country_code = country_code[:3] if len(country_code) > 3 else country_code
+                    
                     if country_code not in country_files:
                         country_files[country_code] = []
                     
                     country_files[country_code].append(os.path.join(DOWNLOAD_DIR, filename))
+                    
                 except Exception as e:
                     print(f"Error processing filename {filename}: {e}")
 
@@ -306,7 +431,7 @@ class ProtonVPN:
             print("No new configuration files found to organize/send.")
             return
 
-        print(f"Found files for {len(country_files)} unique countries: {', '.join(country_files.keys())}")
+        print(f"Found files for {len(country_files)} unique countries/groups: {', '.join(country_files.keys())}")
 
         # 2. Zip and Send each country's files
         for country_code, files in country_files.items():
@@ -333,7 +458,6 @@ class ProtonVPN:
                     if response.status_code == 200:
                         print(f"Successfully sent {zip_filename} to Telegram.")
                     else:
-                        # Log error details for debugging
                         print(f"Failed to send {zip_filename} to Telegram. Status code: {response.status_code}, Response: {response.text}")
                 except Exception as e:
                     print(f"Telegram API Error for {zip_filename}: {e}")
@@ -345,26 +469,27 @@ class ProtonVPN:
         
         print("File organization and sending process completed.")
         
-        # 5. Clean up downloaded files
+        # 5. Clean up downloaded files and clear the log file
         print("Cleaning up individual configuration files...")
         for file in glob.glob(os.path.join(DOWNLOAD_DIR, '*')):
             os.remove(file)
-        # Clear the log file so the next run redownloads everything
-        self.save_downloaded_ids(set())
+        self.save_downloaded_ids(set(), set())
 
 
     def run(self, username, password):
         """Executes the full automation workflow with relogin cycle."""
         
-        all_downloads_finished = False
+        all_wg_finished = False
+        all_ovpn_finished = False
         session_count = 0
-        downloaded_ids = self.load_downloaded_ids()
+        
+        wg_ids, ovpn_ids = self.load_downloaded_ids()
         
         try:
-            while not all_downloads_finished and session_count < 10: 
-                
+            # Phase 1: Download WireGuard/IKEv2 until all are done
+            while not all_wg_finished and session_count < 20: 
                 session_count += 1
-                print(f"\n###################### Starting Session {session_count} ######################")
+                print(f"\n###################### Starting Session {session_count} (Phase 1: WireGuard) ######################")
                 
                 self.setup()
                 if not self.login(username, password):
@@ -372,18 +497,48 @@ class ProtonVPN:
                     break
                 
                 if self.navigate_to_downloads():
-                    all_downloads_finished, downloaded_ids = self.process_downloads(downloaded_ids)
-                    self.save_downloaded_ids(downloaded_ids)
+                    all_wg_finished, wg_ids = self.process_wireguard_downloads(wg_ids)
+                    self.save_downloaded_ids(wg_ids, ovpn_ids)
                 
                 self.logout()
                 self.teardown() 
                 
-                if all_downloads_finished:
-                    print("\n###################### All configurations downloaded successfully! ######################")
-                    self.organize_and_send_files()
-                else:
+                if not all_wg_finished:
                     print(f"Session {session_count} completed. Waiting {RELOGIN_DELAY} seconds before relogging in...")
                     time.sleep(RELOGIN_DELAY) 
+                
+            
+            # Phase 2: Download OpenVPN until all are done
+            session_count = 0
+            while all_wg_finished and not all_ovpn_finished and session_count < 20:
+                session_count += 1
+                print(f"\n###################### Starting Session {session_count} (Phase 2: OpenVPN) ######################")
+                
+                self.setup()
+                if not self.login(username, password):
+                    print("Failed to log in. Aborting run.")
+                    break
+                
+                if self.navigate_to_downloads():
+                    all_ovpn_finished, ovpn_ids = self.process_openvpn_downloads(ovpn_ids)
+                    self.save_downloaded_ids(wg_ids, ovpn_ids)
+                
+                self.logout()
+                self.teardown() 
+                
+                if not all_ovpn_finished:
+                    print(f"Session {session_count} completed. Waiting {RELOGIN_DELAY} seconds before relogging in...")
+                    time.sleep(RELOGIN_DELAY) 
+
+
+            # Final step: Organize and send files if ALL phases are complete
+            if all_wg_finished and all_ovpn_finished:
+                print("\n###################### All configurations (WG & OVPN) downloaded successfully! ######################")
+                self.organize_and_send_files()
+            elif not all_wg_finished:
+                print("Aborting: Could not finish WireGuard/IKEv2 downloads.")
+            elif not all_ovpn_finished:
+                print("Aborting: Could not finish OpenVPN downloads.")
 
         except Exception as e:
             print(f"Runtime Error in main loop: {e}")
